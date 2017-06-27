@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import urllib2
+import re
 
 '''
 check_headers.py
@@ -10,7 +11,7 @@ Checking http headers for given values
 Usage: python check_headers.py
 
 author: Michael Helwig (@c0dmtr1x)
-license: Use at will (None)
+license: LGPLv3
 
 Adjust config settings before use
 
@@ -37,9 +38,26 @@ domains = [
 
 # expected headers
 expected = {
-    "strict-transport-security":{
-          "value":"max-age=15552000",
-          "required":True
+    # check for multiple regex matches
+    "set-cookie" : [
+        { 
+          "contains":["HttpOnly"],
+          "required": True
+        },
+        {
+            "contains":["Secure"],
+            "required": {
+                "protocol":["https"]
+            }
+        
+        }
+    ],
+
+    "strict-transport-security": {
+          "contains":"max-age=15552000",
+          "required":{
+              "protocol":["https"]
+          }
     },
     "x-xss-protection":{
          "value":"1; mode=block",
@@ -54,9 +72,9 @@ expected = {
         "required":True
     },
     "dummy":{
-        "value":"1",
+        "contains":"1",
         "required":False
-     }    
+     }
 }
 
 #timeout for url requests
@@ -93,6 +111,17 @@ class HeaderRedirectHandler(urllib2.HTTPRedirectHandler):
         result.status = code  
         return result
 
+def check_header(info,key,expected_entry,protocol):
+    if "value" in expected_entry.keys() and expected_entry["value"] == info[key]:
+        print " [OK] " + key + ": " + info[key]
+    elif "value" in expected_entry.keys() and (expected_entry["required"] == True or (isinstance(expected_entry["required"],dict) and "protocol" in expected_entry["required"] and protocol in expected_entry["required"]["protocol"])):
+        print " [ERROR] Unexpected " + key + ": " + info[key]
+    if "contains" in expected_entry.keys():
+        for contains_entry in expected_entry["contains"]:
+            if re.match(info[key],contains_entry):
+	        print " [OK] " + key +" matches " + contains_entry
+            elif expected_entry["required"] == True or isinstance(expected_entry["required"],dict) and "protocol" in expected_entry["required"] and protocol in expected_entry["required"]["protocol"]:
+	        print " [ERROR] " + key + " does not match " + contains_entry
 
 for domain in domains:
     for protocol in protocols:
@@ -103,15 +132,16 @@ for domain in domains:
 	    opener.addheaders = [('User-Agent', useragent)]
 	    response = opener.open(url,timeout=timeout)
 	    info = response.info()
-	    for i in expected.keys():
-		 if i in info:
-		     if expected.get(i)["value"] == info[i]:
-			 print " [OK] " + i + ": " + info[i]
-		     elif expected.get(i)["required"]:
-			 print " [ERROR] Unexpected " + i + ": " + info[i]
+	    for key in expected.keys():
+		 if key in info:
+                     if isinstance(expected[key],dict):
+                         check_header(info,key,expected.get(key),protocol)
+                     elif isinstance(expected[key],list):
+                         for entry in expected.get(key):
+                             check_header(info,key,entry,protocol)
 		 else:
-		     if expected.get(i)["required"]:
-			 print " [ERROR] Missing " + i
+		     if expected.get(key)["required"]:
+			 print " [ERROR] Missing " + key
 
 	except IOError, e:
 	    if hasattr(e,'code'):
